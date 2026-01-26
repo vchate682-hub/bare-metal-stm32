@@ -1,0 +1,80 @@
+#include <stdint.h>
+
+
+
+#define RCC_BASE    0x40023800UL
+#define GPIOC_BASE  0x40020800UL
+#define RCC         ((RCC_TypeDef *)  RCC_BASE)
+#define GPIOC      ((GPIO_TypeDef *) GPIOC_BASE)
+#define BSRR_SET(pin)    (1UL << (pin))
+#define BSRR_RESET(pin)  (1UL << ((pin) + 16))
+typedef struct {
+    volatile uint32_t MODER;
+    volatile uint32_t OTYPER;
+    volatile uint32_t OSPEEDR;
+    volatile uint32_t PUPDR;
+    volatile uint32_t IDR;
+    volatile uint32_t ODR;
+    volatile uint32_t BSRR;
+    volatile uint32_t LCKR;
+    volatile uint32_t AFRL;
+    volatile uint32_t AFRH;
+} GPIO_TypeDef;
+
+
+typedef struct {
+    volatile uint32_t CR;
+    volatile uint32_t PLLCFGR;
+    volatile uint32_t CFGR;
+    volatile uint32_t CIR;
+    uint32_t RESERVED[8];
+    volatile uint32_t AHB1ENR;
+} RCC_TypeDef;
+
+
+typedef enum
+{
+    GPIO_MODE_INPUT  = 0x00,
+    GPIO_MODE_OUTPUT = 0x01
+} GPIO_Mode_t;
+
+
+void GPIO_SetMode(GPIO_TypeDef *GPIOx, uint8_t pin, GPIO_Mode_t mode)
+{
+    GPIOx->MODER &= ~(0x3UL << (pin * 2));
+    GPIOx->MODER |= ((uint32_t)mode << (pin * 2));
+}
+void deley()
+{
+	 for(volatile int i = 0; i < 500000; i++);
+}
+
+int main(void)
+{
+
+    RCC->AHB1ENR |= (1 << 2);
+    GPIO_SetMode(GPIOC, 10, GPIO_MODE_OUTPUT);
+    GPIO_SetMode(GPIOC, 11, GPIO_MODE_OUTPUT);
+    GPIO_SetMode(GPIOC, 12, GPIO_MODE_OUTPUT);
+
+
+
+    while(1)
+    {
+
+
+        GPIOC->BSRR = BSRR_SET(10);
+          deley();
+        GPIOC->BSRR = BSRR_RESET(10);
+           deley();
+           GPIOC->BSRR = BSRR_SET(11);
+           deley();
+           GPIOC->BSRR = BSRR_RESET(11);
+           deley();
+           GPIOC->BSRR = BSRR_SET(12);
+           deley();
+           GPIOC->BSRR = BSRR_RESET(12);
+           deley();
+
+    }
+}
