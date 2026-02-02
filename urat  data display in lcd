@@ -1,0 +1,179 @@
+#include "stm32f4xx.h"
+#include "stm32f4xx_hal.h"
+
+/* ---------------- LCD pins on GPIOC ---------------- */
+#define D0_Pin GPIO_PIN_0
+#define D1_Pin GPIO_PIN_1
+#define D2_Pin GPIO_PIN_2
+#define D3_Pin GPIO_PIN_3
+#define D4_Pin GPIO_PIN_4
+#define D5_Pin GPIO_PIN_5
+#define D6_Pin GPIO_PIN_6
+#define D7_Pin GPIO_PIN_7
+#define RS_Pin GPIO_PIN_8
+#define EN_Pin GPIO_PIN_9
+#define LCD_PORT GPIOC
+
+/* ---------------- Global variables ---------------- */
+volatile uint8_t rx_data;
+volatile uint8_t rx_flag = 0;
+volatile uint8_t error_flag = 0;
+
+volatile uint8_t tx_buf[]  = "I am a strong girl";
+volatile uint32_t tx_idx = 0;
+
+volatile uint8_t err_buf[] = "UART error";
+volatile uint32_t err_idx = 0;
+
+/* ---------------- LCD functions ---------------- */
+void LCD_GPIO_Init(void)
+{
+    GPIO_InitTypeDef g = {0};
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+
+    g.Pin = D0_Pin|D1_Pin|D2_Pin|D3_Pin|D4_Pin|D5_Pin|D6_Pin|D7_Pin|RS_Pin|EN_Pin;
+    g.Mode = GPIO_MODE_OUTPUT_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(LCD_PORT, &g);
+}
+
+void LCD_Command(uint8_t c)
+{
+    HAL_GPIO_WritePin(LCD_PORT, RS_Pin, GPIO_PIN_RESET);
+
+    HAL_GPIO_WritePin(LCD_PORT, D0_Pin,(c>>0)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D1_Pin,(c>>1)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D2_Pin,(c>>2)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D3_Pin,(c>>3)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D4_Pin,(c>>4)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D5_Pin,(c>>5)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D6_Pin,(c>>6)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D7_Pin,(c>>7)&1);
+
+    HAL_GPIO_WritePin(LCD_PORT, EN_Pin, GPIO_PIN_SET);
+    HAL_Delay(2);
+    HAL_GPIO_WritePin(LCD_PORT, EN_Pin, GPIO_PIN_RESET);
+}
+
+void LCD_Data(uint8_t d)
+{
+    HAL_GPIO_WritePin(LCD_PORT, RS_Pin, GPIO_PIN_SET);
+
+    HAL_GPIO_WritePin(LCD_PORT, D0_Pin,(d>>0)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D1_Pin,(d>>1)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D2_Pin,(d>>2)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D3_Pin,(d>>3)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D4_Pin,(d>>4)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D5_Pin,(d>>5)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D6_Pin,(d>>6)&1);
+    HAL_GPIO_WritePin(LCD_PORT, D7_Pin,(d>>7)&1);
+
+    HAL_GPIO_WritePin(LCD_PORT, EN_Pin, GPIO_PIN_SET);
+    HAL_Delay(2);
+    HAL_GPIO_WritePin(LCD_PORT, EN_Pin, GPIO_PIN_RESET);
+}
+
+void LCD_String(uint8_t *s)
+{
+    while(*s) LCD_Data(*s++);
+}
+
+void LCD_Init(void)
+{
+    HAL_Delay(20);
+    LCD_Command(0x38); // 8-bit, 2 line
+    LCD_Command(0x0C); // Display ON, cursor OFF
+    LCD_Command(0x01); // Clear display
+}
+
+/* ---------------- USART2 functions ---------------- */
+void USART2_Init(void)
+{
+    RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+
+    // PA2 (TX), PA3 (RX) as AF7
+    GPIOA->MODER &= ~((3<<(2*2))|(3<<(3*2)));
+    GPIOA->MODER |=  (2<<(2*2))|(2<<(3*2));
+    GPIOA->AFR[0] |= (7<<(2*4))|(7<<(3*4));
+
+    USART2->BRR = 0x0683; // 9600 baud @16MHz
+    USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
+    USART2->CR3 |= USART_CR3_EIE;
+    USART2->CR1 |= USART_CR1_UE;
+
+    NVIC_EnableIRQ(USART2_IRQn);
+}
+
+void USART2_IRQHandler(void)
+{
+    uint32_t sr = USART2->SR;
+
+    // Error handling
+    if(sr & (USART_SR_ORE|USART_SR_FE|USART_SR_NE))
+    {
+        error_flag = 1;
+        err_idx = 0;
+        (void)USART2->SR;
+        (void)USART2->DR;
+        USART2->CR1 |= USART_CR1_TXEIE;
+    }
+
+    // RX interrupt
+    if(sr & USART_SR_RXNE)
+    {
+        rx_data = USART2->DR;
+        rx_flag = 1;
+        tx_idx = 0;
+        USART2->CR1 |= USART_CR1_TXEIE;
+    }
+
+    // TX interrupt
+    if(sr & USART_SR_TXE)
+    {
+        if(error_flag)
+        {
+            if(err_buf[err_idx])
+                USART2->DR = err_buf[err_idx++];
+            else
+            {
+                error_flag = 0;
+                USART2->CR1 &= ~USART_CR1_TXEIE;
+                LCD_Command(0x01);
+                LCD_String((uint8_t*)"UART Error");
+            }
+        }
+        else
+        {
+            if(tx_buf[tx_idx])
+                USART2->DR = tx_buf[tx_idx++];
+            else
+            {
+                USART2->CR1 &= ~USART_CR1_TXEIE;
+                LCD_Command(0x01);
+                LCD_String((uint8_t*)"UART successful");
+            }
+        }
+    }
+}
+
+/* ---------------- main ---------------- */
+int main(void)
+{
+    HAL_Init();
+    LCD_GPIO_Init();
+    LCD_Init();
+    USART2_Init();
+
+    LCD_String((uint8_t*)"Start...");
+
+    while(1)
+    {
+        if(rx_flag)
+        {
+            rx_flag = 0;
+            LCD_Data(rx_data); // show received character
+        }
+    }
+}
